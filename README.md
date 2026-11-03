@@ -72,7 +72,7 @@ worker 侧：把 `automation_prompt.md` 里的模板粘进一个 interval automa
 | `selftest.sh` | 端到端自测，10 组用例 16 个断言 |
 | `registry.json` | 受管项目列表 |
 
-## 门禁（继承 autonomous-engine GATES，不放松）
+## 门禁（继承 autonomous-engine GATES）
 
 | 条件 | 行为 |
 |---|---|
@@ -80,11 +80,13 @@ worker 侧：把 `automation_prompt.md` 里的模板粘进一个 interval automa
 | `engine.autoAdvance == false` | 全停（用户一句话即可关闭） |
 | 阶段不在 `requirements/prd/tech-plan` | 转人工（除非项目显式 `allowAutoDevelopment`） |
 | `draftPending.confirmed == false` | 等人确认，不投递 |
-| `routeHealth.score < 5` 或 `correctionPending` | 路线修正中，不阻断用户但阻断自动推进 |
+| `routeHealth.score < 5` 或 `correctionPending` | 路线修正中，不投递 |
 | 同 project+stage 已有未消费任务书 | 不重复投（幂等） |
-| 当日投递 ≥ `maxPerDay` | 熔断转人工 |
+| 当日已投递 ≥ `maxPerDay` | 熔断转人工 |
+| `engine.blockedReasons` 非空 | 全停，不再重投（partial/failed/待决问题都要人处置） |
+| result 里 `OPEN_QUESTIONS: n` 且 n>0 | 停在当前阶段，标 `awaiting-decision`，不推进 |
 
-硬红线，不因本工具而放松：**不自动 `git push`、部署阶段永不自动**。
+硬红线（不因本脚本而放松）：**不自动 git push、不自动执行部署阶段**。
 
 ## 自测覆盖
 
@@ -108,6 +110,28 @@ ALL PASS (16 checks, 0 failed)
 - 真实多项目并发下的调度压力（当前按顺序遍历 registry）
 - result 的语义校验（只看首行 STATUS，不看产出质量）
 - automation 侧的端到端联调（模板已给，但没做自动化测试）
+
+## 卡住之后怎么恢复
+
+`blockedReasons` 非空会让 dispatch 完全停手——这是故意的：**同一阶段的任务书被
+无限重投**比停机更糟。人工处置后清空即可续跑：
+
+```bash
+python3 - <<'J'
+import json
+p = "<repo>/.planning/status.json"
+s = json.load(open(p))
+s["engine"]["blockedReasons"] = []
+s["engine"].pop("openQuestions", None)
+json.dump(s, open(p, "w"), ensure_ascii=False, indent=2)
+J
+```
+
+## 为什么要有 OPEN_QUESTIONS
+
+`STATUS: ok` 只说明「该产的东西产出完了」，不说明「没有遗留问题」。需求阶段最常见的
+是产出完整但带若干等产品拍板的问题；照常推进到 prd，下游就建在未定的前提上。
+result 首部声明 `OPEN_QUESTIONS: 5` 就会停在原地，等答案再走。
 
 ## 与上游的关系
 
